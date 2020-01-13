@@ -89,67 +89,88 @@ read input
 ## Function Section ##
 function Delete_All () {
     echo "Delete_All"
-    #Generate list of VPCs and save to variable to only query AWS once. If already made use existing list.
+    #Generate list of VPCs and save to variable to only query AWS once. If already made, use existing list.
     if [ -z $Aws_Query ]; then
         Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
     fi
     # For every VPC in the region 
     for i in `echo $Aws_Query | jq ".Vpcs[] .VpcId"`; do
         echo ${i}
-        
-        aws ec2 delete-vpc --vpc-id ${i}
+        VPC_List+="${i},"
     done
-    read test
+    VPC_Verify "${VPC_List}"
+    read test #remove after testing
 }
 
 ## Parse file for VPC IDs
 function Delete_File () {
     echo "Delete_File"
-    for i in `cat input`; do
+    file="${1}"
+    while IFS= read -r i; do
         echo ${i}
-    done
-    read test
+        VPC_List+="${i},"
+    done < "${file}"
+    VPC_Verify "${VPC_List}"
+    read test #remove after testing
 }
 
 ## Catch all / Comma seperated list of VPC IDs ##
+## Should just directly pass input to VPC_Verify since should already be CSV list
 function Delete_CSL () {
     echo 'Delete_CSL'
     for i in $(echo $input | sed "s/,/ /g")
     do
         echo "$i"
+        VPC_List+="${i},"
     done
+    VPC_Verify "${VPC_List}"
+    read test #remove after testing
+}
 
-    read test
+## Function here to verify all VPC entered are valid in the entered region. ##
+## Catch any invalid entries
+function VPC_Verify () {
+    echo "VPC_Verify"
+    for i in $(echo $input | sed "s/,/ /g")
+    do
+        echo "$i"
+    done
+}
+
+## Function to pass VPC IDs to all the delete functions ##
+## Considering adding GNU parallel to speed up process.
+## Parelle idea > get all resource IDs in one command then parallel the delete commands.
+function Distribute_Delete () {
+    VpcId="${1}"
+    Delete_Instance "${VpcId}"
+    Delete_RDS_Cluster "${VpcId}"
+    Detach_IGW "${VpcId}"
+    Delete_IGW "${VpcId}"
+    Delete_VPC_Endpoint "${VpcId}"
+    Detach_VPC_Gateway "${VpcId}"
+    Delete_VPC_Gateway "${VpcId}"
+    Delete_NAT_Gateway "${VpcId}"
+    Delete_Route_Table "${VpcId}"
+    Detach_ENI "${VpcId}"
+    Delete_ENI "${VpcId}"
+    Delete_Security_Group "${VpcId}"
+    Delete_Subnet "${VpcId}"
+    Delete_VPC "${VpcId}"
 }
 
 ## The below functions handle deleting the resources inside a VPC. ##
 ## These functions should be kept in the order they are called to keep a good idea of the best order to process resources in to never end with a dependancy error. ##
 
-function Delete_CloudFormation () {
-    echo "Delete_CloudFormation"
+## Need to have an optional Cloudformation checker than will alert user if resources being deleted belong to a CFN stack.
+cfn
+
+function Delete_Instance () {
+    echo "Deleting Instances!"
+    
 }
 
-function Delete_Beanstalk () {
-    echo "Delete_Beanstalk"
-}
-
-function Delete_ECS_Cluster () {
-    #https://docs.aws.amazon.com/cli/latest/reference/ecs/delete-cluster.html
-    #All container instances must be deregistered before deleting cluster
-    #Handle deregistration in this function as well.
-    echo "Delete_ECS_Cluster"
-}
-
-function Delete_Instances () {
-    echo "Delete Instance!"
-}
-
-function Delete_RDS_Clusters () {
-    echo "Delete_RDS_Clusters"
-}
-
-function Delete_Route_Tables () {
-    echo "Delete Route Tables"
+function Delete_RDS_Cluster () {
+    echo "Delete_RDS_Cluster"
 }
 
 function Detach_IGW () {
@@ -160,6 +181,10 @@ function Delete_IGW () {
     echo "Delete_IGW"
 }
 
+function Delete_VPC_Endpoint () {
+    echo "Delete_VPC_Endpoint"
+}
+
 function Detach_VPC_Gateway () {
     echo "Detach_VPC_Gateway"
 }
@@ -168,9 +193,25 @@ function Delete_VPC_Gateway () {
     echo "Delete_VPC_Gateway"
 }
 
+function Delete_NAT_Gateway () {
+    echo "Delete_NAT_Gateway"
+}
+
+function Delete_Route_Table () {
+    echo "Delete Route Tables"
+}
+
+function Detach_ENI () {
+    echo "Detach_ENI"
+}
+
+function Delete_ENI () {
+    echo "Delete_ENI"
+}
+
 # Will watch for error 255, if got send to remove rules
-function Delete_Security_Groups () {
-    echo "Delete_Security_Groups"
+function Delete_Security_Group () {
+    echo "Delete_Security_Group"
 }
 
 # The idea for this is if deleting an SG gets a dependacny error (error code 255) it is sent to this which describes all the rules, parses them and deletes them using jq to grab all values from the describe. #
@@ -178,15 +219,22 @@ function Security_Group_Rule_Delete () {
     echo "Security_Group_Rule_Delete"
 }
 
+function Delete_Subnet () {
+    echo "Delete_Subnet"
+}
+
+function Delete_VPC () {
+    echo "Delete_VPC"
+}
 
 ##################################################################
 
 ## Find what method they used and direct to appropriate function. ##
 if [[ ${input} == "All" ]]; then
-    Delete_All
+    Delete_All 
 elif [[ -e ${input} ]]; then
-    Delete_File
+    Delete_File "${input}"
 else
-    Delete_CSL
+    Delete_CSL "${input}"
 fi
 ##################################################################
