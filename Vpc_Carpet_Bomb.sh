@@ -1,90 +1,6 @@
 #!/bin/bash
-##################################################################
-
-## This script will destroy your account if you are not careful ##
+## This script can do serious damage to a company if misused.
 ## This script could irreversably cripple your infastructure if you are not careful ##
-RED='\033[0;31m'
-NC='\033[0m'
-echo "Ji"
-## Warning Banner and acknowledgement section ##
-while (true); do
-    clear
-    echo -e """ ${RED}
-    
-    #     #    #    ######  #     # ### #     #  #####  
-    #  #  #   # #   #     # ##    #  #  ##    # #     # 
-    #  #  #  #   #  #     # # #   #  #  # #   # #       
-    #  #  # #     # ######  #  #  #  #  #  #  # #  #### 
-    #  #  # ####### #   #   #   # #  #  #   # # #     # 
-    #  #  # #     # #    #  #    ##  #  #    ## #     # 
-     ## ##  #     # #     # #     # ### #     #  ##### 
-     
-     """
-    echo -en """${NC}This script is dangerous! It will ruin your account in irreversible ways if you are not careful!
-This script will attempt to delete a single specified VPC from a region, or wipeout all VPCs in a region.
-If you run this script carelessly, or without permission you could irreverably damage or even destory your company.
-Please be careful when using this. 
-Are you certain you wish to proceed?
-
-To proceed type 'This may ruin my account, and I accept that.' 
-Statement: """
-    read response
-    if [[ "${response}" == "This may ruin my account, and I accept that." ]]; then
-        break
-    fi
-done
-clear
-tput clear
-##################################################################
-
-
-## Gets region and validates answer ##
-while (true); do
-    echo -n "Enter the region you wish you destroy: "
-    read REGION
-    if echo `aws ec2 describe-regions | grep RegionName | cut -d '"' -f 4` | grep -w ${REGION}  > /dev/null 2>&1; then
-        break
-    else
-        clear
-        echo "Not a valid region! Try again."
-    fi
-done
-clear
-##################################################################
-
-# Use describes to delete all EC2 instances, subnets,  
-#Useful https://aws.amazon.com/premiumsupport/knowledge-center/troubleshoot-dependency-error-delete-vpc/
-
-## Gets list of all VPCs in a region. Asks user which VPC they want to destory, or if they want to wipe them all.
-
-## Make this optional later for bigger accounts. 
-echo "Would you like generate a list of all VPCs in ${REGION}? y/n"
-echo -n "Answer: "
-read response
-case "$response" in
-    [yY][eE][sS]|[yY]) 
-        Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
-        Vpc_Count=`echo $Aws_Query | jq '.Vpcs[]' | jq length | wc -l`
-        echo "Generating a list of all VPCs found in the region. This make take a while depending on how many are in the account. "
-        for i in $(seq 1 "$Vpc_Count" ); do
-            Vpc_Id_Temp=`echo $Aws_Query | jq ".Vpcs[$(( $i - 1 )) ] .VpcId"` ### TODO make it so the list starts at 1 and substract 1 from i here instead ###
-            echo ${i}". "${Vpc_Id_Temp}
-            declare vpc_${i}=${Vpc_Id_Temp}
-            Option_list=`echo "$Option_list\n${i}. ${Vpc_Id_Temp}"`
-        done
-esac
-##################################################################
-
-## Choose method of deleting VPCs ##
-echo -n """
-Use one of the following methods to specify which VPCs you would like to delete.
-1. Enter a list of comma sperated VPC IDs that you want to delete (e.g vpc-xxxxxxxxx,vpc-yyyyyyyyy,vpc-zzzzzzzzzz).
-2. Enter the path to a file that contains the VPC IDs. Have one ID per line in this file.
-3. Enter "All" as a value and all VPCs will be deleted.
-
-Input: """
-read input
-##################################################################
 
 ## Function Section ##
 function Delete_All () {
@@ -118,12 +34,7 @@ function Delete_File () {
 ## Should just directly pass input to VPC_Verify since should already be CSV list
 function Delete_CSL () {
     echo 'Delete_CSL'
-    for i in $(echo $input | sed "s/,/ /g")
-    do
-        echo "$i"
-        VPC_List+="${i},"
-    done
-    VPC_Verify "${VPC_List}"
+    VPC_Verify "${input}"
     read test #remove after testing
 }
 
@@ -131,10 +42,26 @@ function Delete_CSL () {
 ## Catch any invalid entries
 function VPC_Verify () {
     echo "VPC_Verify"
-    for i in $(echo $input | sed "s/,/ /g")
-    do
+    VPC_List=${1}
+    for i in $(echo ${VPC_List} | sed "s/,/ /g"); do
         echo "$i"
+        error=$( { aws ec2 describe-vpcs --vpc-id ${i} > outfile; } 2>&1 )
+        if ! [[ ${?} == "0" ]]; then
+            echo "Entry '${i}' FAILED with the following error: '${error}'" 
+            Verify_Fail="true"
+        fi
     done
+    if [ -z $Verify_Fail ]; then
+        echo "One or more of your entries failed. Would you like to exit the script to fix this? (Y/n)"
+        echo -n "Answer: "
+        read cont
+        if ! [[ ${cont} =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            clear
+            echo "VPC IDs incorrectly entered. User chose to exit."
+            exit 100
+        fi
+    fi
+    Distribute_Delete "${VPC_List}"
 }
 
 ## Function to pass VPC IDs to all the delete functions ##
@@ -228,6 +155,91 @@ function Delete_VPC () {
 }
 
 ##################################################################
+## Warning section ##
+RED='\033[0;31m'
+NC='\033[0m'
+echo "Ji"
+## Warning Banner and acknowledgement section ##
+while (true); do
+    clear
+    echo -e """ ${RED}
+    
+    #     #    #    ######  #     # ### #     #  #####  
+    #  #  #   # #   #     # ##    #  #  ##    # #     # 
+    #  #  #  #   #  #     # # #   #  #  # #   # #       
+    #  #  # #     # ######  #  #  #  #  #  #  # #  #### 
+    #  #  # ####### #   #   #   # #  #  #   # # #     # 
+    #  #  # #     # #    #  #    ##  #  #    ## #     # 
+     ## ##  #     # #     # #     # ### #     #  ##### 
+     
+     """
+    echo -en """${NC}This script is dangerous! It can damage your infastructure in irreversible ways if you are not careful!
+This script will attempt to delete all VPC IDs that you input, or wipeout all VPCs in a region.
+If you run this script carelessly, or without permission you could take an entire company.
+There will be one final confirmation before any asset is deleted. Think carefully before continuing.
+Please be careful when using this. 
+
+Are you certain you wish to proceed?
+
+To proceed type 'This may ruin my account, and I accept that.' 
+Statement: """
+    read response
+    if [[ "${response}" == "This may ruin my account, and I accept that." ]]; then
+        break
+    fi
+done
+clear
+tput clear
+##################################################################
+
+
+## Gets region and validates answer ##
+while (true); do
+    echo -n "Enter the region you wish you destroy: "
+    read REGION
+    if echo `aws ec2 describe-regions | grep RegionName | cut -d '"' -f 4` | grep -w ${REGION}  > /dev/null 2>&1; then
+        break
+    else
+        clear
+        echo "Not a valid region! Try again."
+    fi
+done
+clear
+##################################################################
+
+# Use describes to delete all EC2 instances, subnets,  
+#Useful https://aws.amazon.com/premiumsupport/knowledge-center/troubleshoot-dependency-error-delete-vpc/
+
+## Gets list of all VPCs in a region. Asks user which VPC they want to destory, or if they want to wipe them all.
+
+## Make this optional later for bigger accounts. 
+echo "Would you like generate a list of all VPCs in ${REGION}? y/n"
+echo -n "Answer: "
+read response
+if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
+        Vpc_Count=`echo $Aws_Query | jq '.Vpcs[]' | jq length | wc -l`
+        echo "Generating a list of all VPCs found in the region. This make take a while depending on how many are in the account. "
+        for i in $(seq 1 "$Vpc_Count" ); do
+            Vpc_Id_Temp=`echo $Aws_Query | jq ".Vpcs[$(( $i - 1 )) ] .VpcId"` ### TODO make it so the list starts at 1 and substract 1 from i here instead ###
+            echo ${i}". "${Vpc_Id_Temp}
+            #declare vpc_${i}=${Vpc_Id_Temp}
+            #Option_list=`echo "$Option_list\n${i}. ${Vpc_Id_Temp}"`
+        done
+fi
+##################################################################
+
+## Choose method of deleting VPCs ##
+echo -n """
+Use one of the following methods to specify which VPCs you would like to delete.
+1. Enter a list of comma sperated VPC IDs that you want to delete (e.g vpc-xxxxxxxxx,vpc-yyyyyyyyy,vpc-zzzzzzzzzz).
+2. Enter the path to a file that contains the VPC IDs. Have one ID per line in this file.
+3. Enter "All" as a value and all VPCs will be deleted.
+
+Input: """
+read input
+##################################################################
+
 
 ## Find what method they used and direct to appropriate function. ##
 if [[ ${input} == "All" ]]; then
