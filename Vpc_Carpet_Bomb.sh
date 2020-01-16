@@ -14,25 +14,26 @@ function Delete_All () {
         echo ${i}
         VPC_List+="${i},"
     done
-    VPC_Verify "${VPC_List}"
+    VPC_Verify "${VPC_List::-1}" # ::-1 removes the last comma
     read test #remove after testing
 }
 
 ## Parse file for VPC IDs
 function Delete_File () {
     echo "Delete_File"
-    file="${1}"
+    file=${1}
     while IFS= read -r i; do
         echo ${i}
         VPC_List+="${i},"
     done < "${file}"
-    VPC_Verify "${VPC_List}"
+    VPC_Verify "${VPC_List::-1}" # ::-1 removes the last comma
     read test #remove after testing
 }
 
 ## Catch all / Comma seperated list of VPC IDs ##
 ## Should just directly pass input to VPC_Verify since should already be CSV list
 function Delete_CSL () {
+    input=${1}
     echo 'Delete_CSL'
     VPC_Verify "${input}"
     read test #remove after testing
@@ -44,11 +45,13 @@ function VPC_Verify () {
     echo "VPC_Verify"
     VPC_List=${1}
     for i in $(echo ${VPC_List} | sed "s/,/ /g"); do
-        echo "$i"
+        echo ${i}
         error=$( { aws ec2 describe-vpcs --vpc-id ${i} > outfile; } 2>&1 )
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${i}' FAILED with the following error: '${error}'" 
             Verify_Fail="true"
+        else
+            Sanitized_Vpc_List+="${i} "
         fi
     done
     if [ -z $Verify_Fail ]; then
@@ -58,42 +61,50 @@ function VPC_Verify () {
         if ! [[ ${cont} =~ ^([yY][eE][sS]|[yY])$ ]]; then
             clear
             echo "VPC IDs incorrectly entered. User chose to exit."
-            exit 100
+            exit 101
         fi
     fi
-    Distribute_Delete "${VPC_List}"
+    if [[ -z ${Sanitized_Vpc_List} ]]; then
+        clear
+        echo "There were no valid entries! Exiting."
+        exit 100
+    fi
+    Distribute_Delete "${Sanitized_Vpc_List::-1}" # ::-1 removes trailing space
 }
 
 ## Function to pass VPC IDs to all the delete functions ##
 ## Considering adding GNU parallel to speed up process.
 ## Parelle idea > get all resource IDs in one command then parallel the delete commands.
 function Distribute_Delete () {
-    VpcId="${1}"
-    Delete_Instance "${VpcId}"
-    Delete_RDS_Cluster "${VpcId}"
-    Detach_IGW "${VpcId}"
-    Delete_IGW "${VpcId}"
-    Delete_VPC_Endpoint "${VpcId}"
-    Detach_VPC_Gateway "${VpcId}"
-    Delete_VPC_Gateway "${VpcId}"
-    Delete_NAT_Gateway "${VpcId}"
-    Delete_Route_Table "${VpcId}"
-    Detach_ENI "${VpcId}"
-    Delete_ENI "${VpcId}"
-    Delete_Security_Group "${VpcId}"
-    Delete_Subnet "${VpcId}"
-    Delete_VPC "${VpcId}"
+    VPC_List=${1}
+    Delete_Instance "${VPC_List}"
+    Delete_RDS_Cluster "${VPC_List}"
+    Detach_IGW "${VPC_List}"
+    Delete_IGW "${VPC_List}"
+    Delete_VPC_Endpoint "${VPC_List}"
+    Detach_VPC_Gateway "${VPC_List}"
+    Delete_VPC_Gateway "${VPC_List}"
+    Delete_NAT_Gateway "${VPC_List}"
+    Delete_Route_Table "${VPC_List}"
+    Detach_ENI "${VPC_List}"
+    Delete_ENI "${VPC_List}"
+    Delete_Security_Group "${VPC_List}"
+    Delete_Subnet "${VPC_List}"
+    Delete_VPC "${VPC_List}"
 }
 
 ## The below functions handle deleting the resources inside a VPC. ##
 ## These functions should be kept in the order they are called to keep a good idea of the best order to process resources in to never end with a dependancy error. ##
 
 ## Need to have an optional Cloudformation checker than will alert user if resources being deleted belong to a CFN stack.
-cfn
 
 function Delete_Instance () {
     echo "Deleting Instances!"
-    
+    VPC_List=${1}
+    for i in `aws ec2 describe-instances --filters Name=vpc-id,Values=${VPC_List} | jq '.Reservations[] .Instances[].InstanceId'`; do
+        #if user said yes to cfn-check check if in list of cfn and skip if in
+        #else delete immediately
+    done
 }
 
 function Delete_RDS_Cluster () {
@@ -195,7 +206,7 @@ tput clear
 
 ## Gets region and validates answer ##
 while (true); do
-    echo -n "Enter the region you wish you destroy: "
+    echo -n "Enter the region the VPC(s) you want to delete are in (e.g us-west-2: "
     read REGION
     if echo `aws ec2 describe-regions | grep RegionName | cut -d '"' -f 4` | grep -w ${REGION}  > /dev/null 2>&1; then
         break
@@ -221,7 +232,7 @@ if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
         Vpc_Count=`echo $Aws_Query | jq '.Vpcs[]' | jq length | wc -l`
         echo "Generating a list of all VPCs found in the region. This make take a while depending on how many are in the account. "
         for i in $(seq 1 "$Vpc_Count" ); do
-            Vpc_Id_Temp=`echo $Aws_Query | jq ".Vpcs[$(( $i - 1 )) ] .VpcId"` ### TODO make it so the list starts at 1 and substract 1 from i here instead ###
+            Vpc_Id_Temp=`echo $Aws_Query | jq ".Vpcs[$(( $i - 1 )) ] .VpcId"`
             echo ${i}". "${Vpc_Id_Temp}
             #declare vpc_${i}=${Vpc_Id_Temp}
             #Option_list=`echo "$Option_list\n${i}. ${Vpc_Id_Temp}"`
@@ -234,7 +245,7 @@ echo -n """
 Use one of the following methods to specify which VPCs you would like to delete.
 1. Enter a list of comma sperated VPC IDs that you want to delete (e.g vpc-xxxxxxxxx,vpc-yyyyyyyyy,vpc-zzzzzzzzzz).
 2. Enter the path to a file that contains the VPC IDs. Have one ID per line in this file.
-3. Enter "All" as a value and all VPCs will be deleted.
+3. Enter "All" as a value and all VPCs in ${REGION} will be deleted.
 
 Input: """
 read input
