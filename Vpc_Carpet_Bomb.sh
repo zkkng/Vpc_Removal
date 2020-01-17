@@ -6,15 +6,16 @@
 function Delete_All () {
     echo "Delete_All"
     #Generate list of VPCs and save to variable to only query AWS once. If already made, use existing list.
-    if [ -z $Aws_Query ]; then
+    if [[ -z $Aws_Query ]]; then
         Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
     fi
     # For every VPC in the region 
     for i in `echo $Aws_Query | jq ".Vpcs[] .VpcId"`; do
-        echo ${i}
+        echo ${i}                                                               #For testing only!
         VPC_List+="${i},"
     done
-    VPC_Verify "${VPC_List::-1}" # ::-1 removes the last comma
+    echo "VPC Finished List: ${VPC_List}"                                       #For testing only!
+    VPC_Verify "${VPC_List::-1}"    # ::-1 removes the last comma
     read test #remove after testing
 }
 
@@ -45,16 +46,17 @@ function VPC_Verify () {
     echo "VPC_Verify"
     VPC_List=${1}
     for i in $(echo ${VPC_List} | sed "s/,/ /g"); do
-        echo ${i}
-        error=$( { aws ec2 describe-vpcs --vpc-id ${i} > outfile; } 2>&1 )
+        echo ${i}                                                               #Testing only
+        i=`sed -e "s/[^ a-z0-9-]//g" <<<${i}`
+        error=$( { aws ec2 describe-vpcs --vpc-id ${i} > outfile; } 2>&1 ) #sed -e "s/[^ a-z0-9-]//g" <<<${i} removes quotes
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${i}' FAILED with the following error: '${error}'" 
             Verify_Fail="true"
         else
-            Sanitized_Vpc_List+="${i} "
+            Sanitized_Vpc_List+="${i},"
         fi
     done
-    if [ -z $Verify_Fail ]; then
+    if [[ -v $Verify_Fail ]]; then
         echo "One or more of your entries failed. Would you like to exit the script to fix this? (Y/n)"
         echo -n "Answer: "
         read cont
@@ -69,6 +71,8 @@ function VPC_Verify () {
         echo "There were no valid entries! Exiting."
         exit 100
     fi
+    echo "Sanitized List ${Sanitized_Vpc_List::-1}"                             #Testing only
+    read test
     Distribute_Delete "${Sanitized_Vpc_List::-1}" # ::-1 removes trailing space
 }
 
@@ -93,83 +97,127 @@ function Distribute_Delete () {
     Delete_VPC "${VPC_List}"
 }
 
+function CFN_List_Generate () {
+    #Checks all stacks in the specified region and makes one huge list of the resource IDs for all stacks.
+    echo "CFN_List_Generate"
+    for i in `aws cloudformation list-stacks --region ${REGION} --stack-status-filter CREATE_COMPLETE | jq  '.StackSummaries[] .StackId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do # Gets list of all CFN stack ARNs in REGION and removes all extra characters
+        output=`aws cloudformation list-stack-resources --region ${REGION} --stack-name ${i}` # Stores output of listing all stack resources
+        echo $output | jq ".StackResourceSummaries[] .PhysicalResourceId"  # Output only physical ID
+    done
+}
+
 ## The below functions handle deleting the resources inside a VPC. ##
 ## These functions should be kept in the order they are called to keep a good idea of the best order to process resources in to never end with a dependancy error. ##
-
+function CFN_Resource_Test () {
+    echo "CFN_Resource_Test"
+    #Need to add logic for generating a list of all CFN resource IDs once, then reference the output in this function.
+    #Ask user if they want to skip CFN resource at beginning > generate and store list > reference list here
+        if [[ ${CFN_Resource_List} == *${Resource_ID}* ]]; then
+            echo "${Resource_ID} belongs to a CloudFormation template. Skipping."
+            Skip_Delete="True"
+        else
+            Skip_Delete="False"
+        fi
+}
 ## Need to have an optional Cloudformation checker than will alert user if resources being deleted belong to a CFN stack.
 
 function Delete_Instance () {
+    #CFN returns instance IDs
     echo "Deleting Instances!"
     VPC_List=${1}
-    for i in `aws ec2 describe-instances --filters Name=vpc-id,Values=${VPC_List} | jq '.Reservations[] .Instances[].InstanceId'`; do
+    for i in `aws ec2 describe-instances --filters "Name=vpc-id,Values=${VPC_List}" | jq '.Reservations[] .Instances[].InstanceId'`; do
         #if user said yes to cfn-check check if in list of cfn and skip if in
         #else delete immediately
+        echo ${i}                                                               #Testing only
     done
 }
 
 function Delete_RDS_Cluster () {
     echo "Delete_RDS_Cluster"
+    for i in `aws rds --region us-west-2 describe-db-clusters | jq '.DBClusters[] .DBClusterIdentifier'`; do
+        echo ${i}
+    done
+}
+
+function Delete_RDS_Instance () {
+    echo "Delete_RDS_Instance"
+    for i in `aws rds --region us-west-2 describe-db-instances | jq '.DBInstances[] .DBInstanceIdentifier'`; do
+        echo ${i}
+    done
 }
 
 function Detach_IGW () {
     echo "Detach_IGW"
+    
 }
 
 function Delete_IGW () {
     echo "Delete_IGW"
+    
 }
 
 function Delete_VPC_Endpoint () {
     echo "Delete_VPC_Endpoint"
+    
 }
 
 function Detach_VPC_Gateway () {
     echo "Detach_VPC_Gateway"
+    
 }
 
 function Delete_VPC_Gateway () {
     echo "Delete_VPC_Gateway"
+    
 }
 
 function Delete_NAT_Gateway () {
     echo "Delete_NAT_Gateway"
+    
 }
 
 function Delete_Route_Table () {
     echo "Delete Route Tables"
+    
 }
 
 function Detach_ENI () {
     echo "Detach_ENI"
+    
 }
 
 function Delete_ENI () {
     echo "Delete_ENI"
+    
 }
 
 # Will watch for error 255, if got send to remove rules
 function Delete_Security_Group () {
+    # CFN returns SG ID
     echo "Delete_Security_Group"
+    
 }
 
 # The idea for this is if deleting an SG gets a dependacny error (error code 255) it is sent to this which describes all the rules, parses them and deletes them using jq to grab all values from the describe. #
 function Security_Group_Rule_Delete () {
     echo "Security_Group_Rule_Delete"
+    
 }
 
 function Delete_Subnet () {
     echo "Delete_Subnet"
+    
 }
 
 function Delete_VPC () {
     echo "Delete_VPC"
+    
 }
 
 ##################################################################
 ## Warning section ##
 RED='\033[0;31m'
 NC='\033[0m'
-echo "Ji"
 ## Warning Banner and acknowledgement section ##
 while (true); do
     clear
@@ -206,7 +254,7 @@ tput clear
 
 ## Gets region and validates answer ##
 while (true); do
-    echo -n "Enter the region the VPC(s) you want to delete are in (e.g us-west-2: "
+    echo -n "Enter the region the VPC(s) you want to delete are in (e.g us-west-2): "
     read REGION
     if echo `aws ec2 describe-regions | grep RegionName | cut -d '"' -f 4` | grep -w ${REGION}  > /dev/null 2>&1; then
         break
