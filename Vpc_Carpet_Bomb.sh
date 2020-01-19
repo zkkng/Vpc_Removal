@@ -102,7 +102,8 @@ function CFN_List_Generate () {
     echo "CFN_List_Generate"
     for i in `aws cloudformation list-stacks --region ${REGION} --stack-status-filter CREATE_COMPLETE | jq  '.StackSummaries[] .StackId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do # Gets list of all CFN stack ARNs in REGION and removes all extra characters
         output=`aws cloudformation list-stack-resources --region ${REGION} --stack-name ${i}` # Stores output of listing all stack resources
-        echo $output | jq ".StackResourceSummaries[] .PhysicalResourceId"  # Output only physical ID
+        echo -e "${output}\n" | jq ".StackResourceSummaries[] .PhysicalResourceId"  # Output only physical ID
+        
     done
 }
 
@@ -287,6 +288,14 @@ if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
         done
 fi
 ##################################################################
+
+## 
+echo "Would you like to skip any resource that is part of a CloudFormation stack?"
+echo -n "Answer (y/n): "
+read response
+if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
+    CFN_Test="True"
+fi
 
 ## Choose method of deleting VPCs ##
 echo -n """
