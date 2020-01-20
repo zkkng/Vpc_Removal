@@ -48,7 +48,7 @@ function VPC_Verify () {
     for i in $(echo ${VPC_List} | sed "s/,/ /g"); do
         echo ${i}                                                               #Testing only
         i=`sed -e "s/[^ a-z0-9-]//g" <<<${i}`
-        error=$( { aws ec2 describe-vpcs --vpc-id ${i} > outfile; } 2>&1 ) #sed -e "s/[^ a-z0-9-]//g" <<<${i} removes quotes
+        error=$( { aws ec2 describe-vpcs --vpc-id ${i} > /dev/null; } 2>&1 ) #sed -e "s/[^ a-z0-9-]//g" <<<${i} removes quotes
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${i}' FAILED with the following error: '${error}'" 
             Verify_Fail="true"
@@ -102,8 +102,11 @@ function CFN_List_Generate () {
     echo "CFN_List_Generate"
     for i in `aws cloudformation list-stacks --region ${REGION} --stack-status-filter CREATE_COMPLETE | jq  '.StackSummaries[] .StackId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do # Gets list of all CFN stack ARNs in REGION and removes all extra characters
         output=`aws cloudformation list-stack-resources --region ${REGION} --stack-name ${i}` # Stores output of listing all stack resources
-        echo -e "${output}\n" | jq ".StackResourceSummaries[] .PhysicalResourceId"  # Output only physical ID
-        
+        for i in `echo "${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`; do 
+            CFN_List+="${i}\n"
+        done
+        #list="${list}\n`echo -e "${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`"  # Output only physical ID
+        #list+="`echo -e "\n ${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`"  # Output only physical ID
     done
 }
 
@@ -111,18 +114,20 @@ function CFN_List_Generate () {
 ## These functions should be kept in the order they are called to keep a good idea of the best order to process resources in to never end with a dependancy error. ##
 function CFN_Resource_Test () {
     echo "CFN_Resource_Test"
+    Resource_ID=${1}
     #Need to add logic for generating a list of all CFN resource IDs once, then reference the output in this function.
     #Ask user if they want to skip CFN resource at beginning > generate and store list > reference list here
-        if [[ ${CFN_Resource_List} == *${Resource_ID}* ]]; then
-            echo "${Resource_ID} belongs to a CloudFormation template. Skipping."
+        if [[ ${CFN_List} == *${Resource_ID}* ]]; then
             Skip_Delete="True"
         else
             Skip_Delete="False"
         fi
+    return ${Skip_Delete}
 }
 ## Need to have an optional Cloudformation checker than will alert user if resources being deleted belong to a CFN stack.
 
 function Delete_Instance () {
+    ##### Consider making full list of instances then deleting all at once. Less API calls. ######
     #CFN returns instance IDs
     echo "Deleting Instances!"
     VPC_List=${1}
@@ -130,6 +135,29 @@ function Delete_Instance () {
         #if user said yes to cfn-check check if in list of cfn and skip if in
         #else delete immediately
         echo ${i}                                                               #Testing only
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            if [[ ${Skip_Delete} == "False" ]]; then
+                #error=$( { aws ec2 terminate-instances --instance-ids ${i} > /dev/null; } 2>&1 ) # This will be the final command for now we use one with --dry-run
+                error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing  #Consider making full list of instances then deleting all at once. Less API calls.
+                if ! [[ ${?} == "0" ]]; then
+                    echo "Entry '${i}' FAILED with the following error: '${error}'"
+                else
+                    echo "Deleted ${i}"
+                fi
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            #error=$( { aws ec2 terminate-instances --instance-ids ${i} > /dev/null; } 2>&1 ) # This will be the final command for now we use one with --dry-run
+            error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
+            if ! [[ ${?} == "0" ]]; then
+                echo "Entry '${i}' FAILED with the following error: '${error}'"
+            else
+                echo "Deleted ${i}"
+            fi
+        fi
+        # End CFN Snippet #
     done
 }
 
@@ -217,20 +245,20 @@ function Delete_VPC () {
 
 ##################################################################
 ## Warning section ##
-RED='\033[0;31m'
-NC='\033[0m'
+RED='\033[0;31m' #Makes text RED
+NC='\033[0m' #Makes text default, NC = No Color
 ## Warning Banner and acknowledgement section ##
 while (true); do
     clear
     echo -e """ ${RED}
     
-    #     #    #    ######  #     # ### #     #  #####  
-    #  #  #   # #   #     # ##    #  #  ##    # #     # 
-    #  #  #  #   #  #     # # #   #  #  # #   # #       
-    #  #  # #     # ######  #  #  #  #  #  #  # #  #### 
-    #  #  # ####### #   #   #   # #  #  #   # # #     # 
-    #  #  # #     # #    #  #    ##  #  #    ## #     # 
-     ## ##  #     # #     # #     # ### #     #  ##### 
+    #     #    #    ######  #     # ### #     #  #####
+    #  #  #   # #   #     # ##    #  #  ##    # #     #
+    #  #  #  #   #  #     # # #   #  #  # #   # #   
+    #  #  # #     # ######  #  #  #  #  #  #  # #  ####
+    #  #  # ####### #   #   #   # #  #  #   # # #     #
+    #  #  # #     # #    #  #    ##  #  #    ## #     #
+     ## ##  #     # #     # #     # ### #     #  #####
      
      """
     echo -en """${NC}This script is dangerous! It can damage your infastructure in irreversible ways if you are not careful!
@@ -249,7 +277,7 @@ Statement: """
     fi
 done
 clear
-tput clear
+tput clear # Doesnt matter in Python
 ##################################################################
 
 
@@ -295,17 +323,20 @@ echo -n "Answer (y/n): "
 read response
 if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
     CFN_Test="True"
+    echo "Gathering list of all CFN resources. This may take a while depending on how many stacks are present in the region."
+    CFN_List_Generate
 fi
-
+clear
 ## Choose method of deleting VPCs ##
 echo -n """
 Use one of the following methods to specify which VPCs you would like to delete.
 1. Enter a list of comma sperated VPC IDs that you want to delete (e.g vpc-xxxxxxxxx,vpc-yyyyyyyyy,vpc-zzzzzzzzzz).
 2. Enter the path to a file that contains the VPC IDs. Have one ID per line in this file.
-3. Enter "All" as a value and all VPCs in ${REGION} will be deleted.
+3. Enter 'All' as a value and all VPCs in ${REGION} will be deleted.
 
 Input: """
 read input
+clear
 ##################################################################
 
 
