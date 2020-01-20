@@ -4,24 +4,24 @@
 
 ## Function Section ##
 function Delete_All () {
-    echo "Delete_All"
+    #echo "Delete_All"
     #Generate list of VPCs and save to variable to only query AWS once. If already made, use existing list.
     if [[ -z $Aws_Query ]]; then
         Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
     fi
     # For every VPC in the region 
     for i in `echo $Aws_Query | jq ".Vpcs[] .VpcId"`; do
-        echo ${i}                                                               #For testing only!
+        #echo ${i}                                                               #For testing only!
         VPC_List+="${i},"
     done
-    echo "VPC Finished List: ${VPC_List}"                                       #For testing only!
+    #echo "VPC Finished List: ${VPC_List}"                                       #For testing only!
     VPC_Verify "${VPC_List::-1}"    # ::-1 removes the last comma
     read test #remove after testing
 }
 
 ## Parse file for VPC IDs
 function Delete_File () {
-    echo "Delete_File"
+    #echo "Delete_File"
     file=${1}
     while IFS= read -r i; do
         echo ${i}
@@ -43,10 +43,10 @@ function Delete_CSL () {
 ## Function here to verify all VPC entered are valid in the entered region. ##
 ## Catch any invalid entries
 function VPC_Verify () {
-    echo "VPC_Verify"
+    #echo "VPC_Verify"
     VPC_List=${1}
     for i in $(echo ${VPC_List} | sed "s/,/ /g"); do
-        echo ${i}                                                               #Testing only
+        #echo ${i}                                                               #Testing only
         i=`sed -e "s/[^ a-z0-9-]//g" <<<${i}`
         error=$( { aws ec2 describe-vpcs --vpc-id ${i} > /dev/null; } 2>&1 ) #sed -e "s/[^ a-z0-9-]//g" <<<${i} removes quotes
         if ! [[ ${?} == "0" ]]; then
@@ -71,8 +71,7 @@ function VPC_Verify () {
         echo "There were no valid entries! Exiting."
         exit 100
     fi
-    echo "Sanitized List ${Sanitized_Vpc_List::-1}"                             #Testing only
-    read test
+    #echo "Sanitized List ${Sanitized_Vpc_List::-1}"                             #Testing only
     Distribute_Delete "${Sanitized_Vpc_List::-1}" # ::-1 removes trailing space
 }
 
@@ -103,11 +102,12 @@ function CFN_List_Generate () {
     for i in `aws cloudformation list-stacks --region ${REGION} --stack-status-filter CREATE_COMPLETE | jq  '.StackSummaries[] .StackId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do # Gets list of all CFN stack ARNs in REGION and removes all extra characters
         output=`aws cloudformation list-stack-resources --region ${REGION} --stack-name ${i}` # Stores output of listing all stack resources
         for i in `echo "${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`; do 
-            CFN_List+="${i}\n"
+            CFN_List+="${i} "
         done
         #list="${list}\n`echo -e "${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`"  # Output only physical ID
         #list+="`echo -e "\n ${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`"  # Output only physical ID
     done
+    echo $CFN_List
 }
 
 ## The below functions handle deleting the resources inside a VPC. ##
@@ -122,7 +122,7 @@ function CFN_Resource_Test () {
         else
             Skip_Delete="False"
         fi
-    return ${Skip_Delete}
+    #return "${Skip_Delete}"
 }
 ## Need to have an optional Cloudformation checker than will alert user if resources being deleted belong to a CFN stack.
 
@@ -131,12 +131,12 @@ function Delete_Instance () {
     #CFN returns instance IDs
     echo "Deleting Instances!"
     VPC_List=${1}
-    for i in `aws ec2 describe-instances --filters "Name=vpc-id,Values=${VPC_List}" | jq '.Reservations[] .Instances[].InstanceId'`; do
+    for i in `aws ec2 describe-instances --filters "Name=vpc-id,Values=${VPC_List}" | jq '.Reservations[] .Instances[].InstanceId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do
         #if user said yes to cfn-check check if in list of cfn and skip if in
-        #else delete immediately
-        echo ${i}                                                               #Testing only
+        #else delete immediately                                                       #Testing only
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
                 #error=$( { aws ec2 terminate-instances --instance-ids ${i} > /dev/null; } 2>&1 ) # This will be the final command for now we use one with --dry-run
                 error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing  #Consider making full list of instances then deleting all at once. Less API calls.
@@ -298,26 +298,7 @@ clear
 # Use describes to delete all EC2 instances, subnets,  
 #Useful https://aws.amazon.com/premiumsupport/knowledge-center/troubleshoot-dependency-error-delete-vpc/
 
-## Gets list of all VPCs in a region. Asks user which VPC they want to destory, or if they want to wipe them all.
-
-## Make this optional later for bigger accounts. 
-echo "Would you like generate a list of all VPCs in ${REGION}? y/n"
-echo -n "Answer: "
-read response
-if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
-        Vpc_Count=`echo $Aws_Query | jq '.Vpcs[]' | jq length | wc -l`
-        echo "Generating a list of all VPCs found in the region. This make take a while depending on how many are in the account. "
-        for i in $(seq 1 "$Vpc_Count" ); do
-            Vpc_Id_Temp=`echo $Aws_Query | jq ".Vpcs[$(( $i - 1 )) ] .VpcId"`
-            echo ${i}". "${Vpc_Id_Temp}
-            #declare vpc_${i}=${Vpc_Id_Temp}
-            #Option_list=`echo "$Option_list\n${i}. ${Vpc_Id_Temp}"`
-        done
-fi
-##################################################################
-
-## 
+## Optional CFN test section ##
 echo "Would you like to skip any resource that is part of a CloudFormation stack?"
 echo -n "Answer (y/n): "
 read response
@@ -327,6 +308,29 @@ if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
     CFN_List_Generate
 fi
 clear
+#################################################################
+
+## Make this optional later for bigger accounts. 
+echo "Would you like generate a list of all VPCs in ${REGION}? y/n"
+echo -n "Answer: "
+read response
+if [[ ${response} =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        clear
+        echo "Generating a list of all VPCs found in the region. This make take a while depending on how many are in the account. "
+        Aws_Query=`aws ec2 --region ${REGION} describe-vpcs`
+        Vpc_Count=`echo $Aws_Query | jq '.Vpcs[]' | jq length | wc -l`
+        for i in $(seq 1 "$Vpc_Count" ); do
+            Vpc_Id_Temp=`echo $Aws_Query | jq ".Vpcs[$(( $i - 1 )) ] .VpcId"`
+            echo ${i}". "${Vpc_Id_Temp}
+            #declare vpc_${i}=${Vpc_Id_Temp}
+            #Option_list=`echo "$Option_list\n${i}. ${Vpc_Id_Temp}"`
+        done
+else
+    clear
+fi
+##################################################################
+
+## Gets list of all VPCs in a region. Asks user which VPC they want to destory, or if they want to wipe them all.
 ## Choose method of deleting VPCs ##
 echo -n """
 Use one of the following methods to specify which VPCs you would like to delete.
