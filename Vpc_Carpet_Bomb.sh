@@ -128,6 +128,7 @@ function CFN_Resource_Test () {
 
 function Delete_Instance () {
     ##### Consider making full list of instances then deleting all at once. Less API calls. ######
+    ##### One If for CFN check then both ways just make a list and pass to a final delete whatever is in the list. #####
     #CFN returns instance IDs
     echo "Deleting Instances!"
     VPC_List=${1}
