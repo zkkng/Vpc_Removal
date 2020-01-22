@@ -85,8 +85,7 @@ function Distribute_Delete () {
     Detach_IGW "${VPC_List}"
     Delete_IGW "${VPC_List}"
     Delete_VPC_Endpoint "${VPC_List}"
-    Detach_VPC_Gateway "${VPC_List}"
-    Delete_VPC_Gateway "${VPC_List}"
+    Detach_VPN_Gateway "${VPC_List}"
     Delete_NAT_Gateway "${VPC_List}"
     Delete_Route_Table "${VPC_List}"
     Detach_ENI "${VPC_List}"
@@ -134,29 +133,44 @@ function Delete_Instance () {
     VPC_List=${1}
     for i in `aws ec2 describe-instances --filters "Name=vpc-id,Values=${VPC_List}" | jq '.Reservations[] .Instances[].InstanceId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do
         #if user said yes to cfn-check check if in list of cfn and skip if in
-        #else delete immediately                                                       #Testing only
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
-                #error=$( { aws ec2 terminate-instances --instance-ids ${i} > /dev/null; } 2>&1 ) # This will be the final command for now we use one with --dry-run
-                error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing  #Consider making full list of instances then deleting all at once. Less API calls.
-                if ! [[ ${?} == "0" ]]; then
-                    echo "Entry '${i}' FAILED with the following error: '${error}'"
-                else
-                    echo "Deleted ${i}"
-                fi
+                Delete_List+="${i} "
             else
                 echo "${i} belongs to a CloudFormation template. Skipping."
             fi
         else
-            #error=$( { aws ec2 terminate-instances --instance-ids ${i} > /dev/null; } 2>&1 ) # This will be the final command for now we use one with --dry-run
-            error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
-            if ! [[ ${?} == "0" ]]; then
-                echo "Entry '${i}' FAILED with the following error: '${error}'"
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
+    # for loop to delete individually to allow for individual error reporting? unless it handles deleting some but not all instances need to do testing
+    for i in ${Delete_List}; do
+        error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
+        if ! [[ ${?} == "0" ]]; then
+            echo "Entry '${i}' FAILED with the following error: '${error}'"
+        else
+            echo "Deleted ${i}"
+        fi
+    done
+}
+
+function Delete_RDS_Instance () {
+    echo "Delete_RDS_Instance"
+    for i in `aws rds --region us-west-2 describe-db-instances | jq '.DBInstances[] .DBInstanceIdentifier'`; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
             else
-                echo "Deleted ${i}"
+                echo "${i} belongs to a CloudFormation template. Skipping."
             fi
+        else
+            Delete_List+="${i} "
         fi
         # End CFN Snippet #
     done
@@ -166,72 +180,232 @@ function Delete_RDS_Cluster () {
     echo "Delete_RDS_Cluster"
     for i in `aws rds --region us-west-2 describe-db-clusters | jq '.DBClusters[] .DBClusterIdentifier'`; do
         echo ${i}
-    done
-}
-
-function Delete_RDS_Instance () {
-    echo "Delete_RDS_Instance"
-    for i in `aws rds --region us-west-2 describe-db-instances | jq '.DBInstances[] .DBInstanceIdentifier'`; do
-        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
     done
 }
 
 function Detach_IGW () {
     echo "Detach_IGW"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
 function Delete_IGW () {
     echo "Delete_IGW"
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
     
 }
 
 function Delete_VPC_Endpoint () {
     echo "Delete_VPC_Endpoint"
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
+}
+
+function Delete_VPC_Peering () {
+    echo "Delete_VPC_Peering"
     
 }
 
-function Detach_VPC_Gateway () {
+#######This block will call eachother since they need to reference eachother's output ###
+function Detach_VPN_Gateway () {
     echo "Detach_VPC_Gateway"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
-function Delete_VPC_Gateway () {
+function Delete_VPN_Gateway () {
     echo "Delete_VPC_Gateway"
-    
+    #need to save this list for end
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
+
+function Delete_VPN_connection () {
+    #https://docs.aws.amazon.com/cli/latest/reference/ec2/delete-vpn-connection.html
+    #Best practice Detach VPN Gateway >
+    echo "Delete_VPN_connection"
+}
+######################################################################################
 
 function Delete_NAT_Gateway () {
     echo "Delete_NAT_Gateway"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
 function Delete_Route_Table () {
     echo "Delete Route Tables"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
 function Detach_ENI () {
     echo "Detach_ENI"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
 function Delete_ENI () {
     echo "Delete_ENI"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
 # Will watch for error 255, if got send to remove rules
 function Delete_Security_Group () {
     # CFN returns SG ID
     echo "Delete_Security_Group"
-    
+    for i in echo "Placeholder"; do
+        echo ${i}
+        #CFN Snippet use to check all CFN resource! #
+        if [[ ${CFN_Test} == "True" ]]; then
+            CFN_Resource_Test "${i}"
+            if [[ ${Skip_Delete} == "False" ]]; then
+                Delete_List+="${i} "
+            else
+                echo "${i} belongs to a CloudFormation template. Skipping."
+            fi
+        else
+            Delete_List+="${i} "
+        fi
+        # End CFN Snippet #
+    done
 }
 
 # The idea for this is if deleting an SG gets a dependacny error (error code 255) it is sent to this which describes all the rules, parses them and deletes them using jq to grab all values from the describe. #
 function Security_Group_Rule_Delete () {
     echo "Security_Group_Rule_Delete"
-    
+    aws ec2 revoke-security-group-ingress --group-id sg-028150dc2eb59ef6b --ip-permissions '[{"IpProtocol": "udp", "FromPort": 20000, "ToPort": 21000, "UserIdGroupPairs": [{"GroupId": "sg-06faf27bbd27832f4"}]}]'
 }
 
 function Delete_Subnet () {
@@ -243,6 +417,7 @@ function Delete_VPC () {
     echo "Delete_VPC"
     
 }
+
 
 ##################################################################
 ## Warning section ##
