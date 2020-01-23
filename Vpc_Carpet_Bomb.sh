@@ -419,7 +419,7 @@ function Delete_Security_Group () {
     fi
 }
 
-# This function is a catastrophe and I am not smart enough to fix it =(
+# This function is a catastrophe and I am not smart enough to make it pretty =(
 function Security_Group_Rule_Delete () {
     echo "Security_Group_Rule_Delete"
     SG_Dependacy_Queue=${1}
@@ -438,7 +438,7 @@ function Security_Group_Rule_Delete () {
                 fi
             done
             for i in $( seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${i}] .IpPermissionsEgress"  | jq length` - 1 )) ); do
-                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${i}')"`        # For Each rule check if it contains the SG-Id that is being deleted
+                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${i}')"`  # For Each rule check if it contains the SG-Id that is being deleted
                 if ! [[ -z ${Test_Val} ]]; then                                                                                                             # If that value is found delete the rule
                     echo "Deleting rule"
                     GroupId=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .GroupId" | sed -e "s/[^ a-z0-9-]//g"`
