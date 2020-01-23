@@ -137,17 +137,17 @@ function Delete_Instance () {
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
-                Delete_List+="${i} "
+                Delete_List_Instance+="${i} "
             else
                 echo "${i} belongs to a CloudFormation template. Skipping."
             fi
         else
-            Delete_List+="${i} "
+            Delete_List_Instance+="${i} "
         fi
         # End CFN Snippet #
     done
     # for loop to delete individually to allow for individual error reporting? unless it handles deleting some but not all instances need to do testing
-    for i in ${Delete_List}; do
+    for i in ${Delete_List_Instance}; do
         error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${i}' FAILED with the following error: '${error}'"
@@ -165,12 +165,12 @@ function Delete_RDS_Instance () {
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
-                Delete_List+="${i} "
+                Delete_List_RDS+="${i} "
             else
                 echo "${i} belongs to a CloudFormation template. Skipping."
             fi
         else
-            Delete_List+="${i} "
+            Delete_List_RDS+="${i} "
         fi
         # End CFN Snippet #
     done
@@ -184,12 +184,12 @@ function Delete_RDS_Cluster () {
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
-                Delete_List+="${i} "
+                Delete_List_Cluster+="${i} "
             else
                 echo "${i} belongs to a CloudFormation template. Skipping."
             fi
         else
-            Delete_List+="${i} "
+            Delete_List_Cluster+="${i} "
         fi
         # End CFN Snippet #
     done
@@ -381,31 +381,85 @@ function Delete_ENI () {
     done
 }
 
-# Will watch for error 255, if got send to remove rules
+# Any SG delete that returns an error that has (DependencyViolation) will be queued for rule delete script. Any other error will just fail and show error.
 function Delete_Security_Group () {
     # CFN returns SG ID
     echo "Delete_Security_Group"
-    for i in echo "Placeholder"; do
+    for i in `aws ec2 describe-security-groups --filters "Name=vpc-id,Values=${VPC_List}" | jq ".SecurityGroups[] .GroupId"`; do
         echo ${i}
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
-                Delete_List+="${i} "
+                Delete_List_SG+="${i} "
             else
                 echo "${i} belongs to a CloudFormation template. Skipping."
             fi
         else
-            Delete_List+="${i} "
+            Delete_List_SG+="${i} "
         fi
         # End CFN Snippet #
     done
+    for i in ${Delete_List_SG}; do
+        echo ${i}
+        SG_ID=`sed -e "s/[^ a-z0-9-]//g" <<<${i}`
+        error=$( { aws ec2 delete-security-group --dry-run --group-id ${SG_ID} > /dev/null; } 2>&1 )
+        if ! [[ ${?} == "0" ]]; then
+            if [[ ${error} == *"DependencyViolation"* ]]; then
+                SG_Dependacy_Queue+="${SG_ID} "
+            else
+                echo "Entry '${SG_ID}' FAILED with the following error: '${error}'"
+            fi
+        else
+            echo "Deleted ${SG_ID}"
+        fi
+    done
+    if [[ -z ${SG_Dependacy_Queue} ]]; then
+        Security_Group_Rule_Delete "${SG_Dependacy_Queue}"
+    fi
 }
 
-# The idea for this is if deleting an SG gets a dependacny error (error code 255) it is sent to this which describes all the rules, parses them and deletes them using jq to grab all values from the describe. #
+# This function is a catastrophe and I am not smart enough to fix it =(
 function Security_Group_Rule_Delete () {
     echo "Security_Group_Rule_Delete"
-    aws ec2 revoke-security-group-ingress --group-id sg-028150dc2eb59ef6b --ip-permissions '[{"IpProtocol": "udp", "FromPort": 20000, "ToPort": 21000, "UserIdGroupPairs": [{"GroupId": "sg-06faf27bbd27832f4"}]}]'
+    SG_Dependacy_Queue=${1}
+    for i in ${SG_Dependacy_Queue}; do
+        Remove_Rules_List=`aws ec2 describe-security-groups --filters "Name=ip-permission.group-id,Values=${i}"`
+        for x in $(seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[]" | jq length` - 1 )) ); do                                                  # Gets sequence of number of seucrity groups for each SG
+            for y in $(seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${x}] .IpPermissions"  | jq length` - 1 )) ); do                          # For each SG Gets sequence of number of rules
+                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${i}')"`        # For Each rule check if it contains the SG-Id that is being deleted
+                if ! [[ -z ${Test_Val} ]]; then                                                                                                             # If that value is found delete the rule
+                    echo "Deleting rule"
+                    GroupId=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .GroupId" | sed -e "s/[^ a-z0-9-]//g"`
+                    Protocol=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .IpProtocol" | sed -e "s/[^ a-z0-9-]//g"`
+                    FromPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .FromPort" | sed -e "s/[^ a-z0-9-]//g"`
+                    ToPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .ToPort" | sed -e "s/[^ a-z0-9-]//g"`
+                    aws ec2 revoke-security-group-ingress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${i}'}]}]"
+                fi
+            done
+            for i in $( seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${i}] .IpPermissionsEgress"  | jq length` - 1 )) ); do
+                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${i}')"`        # For Each rule check if it contains the SG-Id that is being deleted
+                if ! [[ -z ${Test_Val} ]]; then                                                                                                             # If that value is found delete the rule
+                    echo "Deleting rule"
+                    GroupId=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .GroupId" | sed -e "s/[^ a-z0-9-]//g"`
+                    Protocol=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .IpProtocol" | sed -e "s/[^ a-z0-9-]//g"`
+                    FromPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .FromPort" | sed -e "s/[^ a-z0-9-]//g"`
+                    ToPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .ToPort" | sed -e "s/[^ a-z0-9-]//g"`
+                    aws ec2 revoke-security-group-egress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${i}'}]}]"
+                fi
+            done
+            # logic so I do not forget because i am dumdum
+            # Remove_Rules_List is a list of OTHER SGs that reference the one that is being deleted
+            # This for loop will sequence throguh .SecurityGroups[0-x]
+            # We then need a count of all .ippermission and .egressrules sperately in each .SecurityGroups[0-x]
+            # then for loop through each .IpPermissions[0-y] and use .UserIdGroupPairs[0] | select(.GroupId=="${i}")'
+            # if it DOESNT return an error we take all values from that .IpPermissions or egress and use those values to delete the rule
+            # Then we ALSO need to check VPC peering dependancies and decide if we are going to even try deleting those. Maybe check if the other VPC is in the same account and if it is then go delete the rules using same logic.
+            # This is just an example command to select a rule with a specific SG-id ---- echo $Remove_Rules_List | jq '.SecurityGroups[] .IpPermissions[] .UserIdGroupPairs[0] | select(.GroupId=="sg-010817e281d9d1f42")'
+        done
+    done
+    #aws ec2 describe-security-groups --group-ids sg-028150dc2eb59ef6b  | jq ".SecurityGroups[] .IpPermissions[0]" #Have to use a seq for this. get group-id passed from first function.
+    #aws ec2 revoke-security-group-ingress --group-id sg-028150dc2eb59ef6b --ip-permissions '[{"IpProtocol": "udp", "FromPort": 20000, "ToPort": 21000, "UserIdGroupPairs": [{"GroupId": "sg-06faf27bbd27832f4"}]}]'
 }
 
 function Delete_Subnet () {
