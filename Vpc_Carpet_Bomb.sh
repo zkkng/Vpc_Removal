@@ -463,23 +463,17 @@ function Security_Group_Rule_Delete () {
         ### All VPCs in the account should be checked so only need for VPC peering check would be to tell the user where the dependancies are. ###
         ### Since this isnt absolutely necessary I am leaving it unfinished for now. I am just too lazy ###
         
-#        Peering_Ref=`aws ec2 describe-security-group-references --group-id ${Sec_Id}`
-#        Peer_Count=`echo ${Peering_Ref} | | jq ".SecurityGroupReferenceSet" | jq length`
-#        if ((  ${Peer_Count} > 0 )); then
-#            echo "holder" 
-#            for a in $(seq 0 $(( ${Peer_Count} - 1 )) ); do
-#                Peer_Vpc_Id=`echo ${Peering_Ref} | jq ".SecurityGroupReferenceSet[${a}] .ReferencingVpcId" | sed -e "s/[^ a-z0-9-]//g"`
-#                Peer_Acc_Id=`aws ec2 describe-vpcs --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .OwnerId"`
-                 # Could just take the two above values and output them to screen saying this dependancy exists and they will need to go remove it. #
-#                Current_Acc_Id=`aws sts get-caller-identity | jq ".Account"`
-#                if [[ ${Current_Acc_Id} == ${Peer_Acc_Id} ]]; then
-#                      for b in `aws ec2 describe-security-groups --filters "Name=ip-permission.group-id,Values=${Sec_Id}"` 
-#                fi
-                #For each reference check that the VPC is in same account (sg-references across region not supported so do not check for this)
-                #describe the vpc's SG and filter by ${i}
-                #Repeat exact same removal process
-#            done
-#        fi
+        Peering_Ref=`aws ec2 describe-security-group-references --group-id ${Sec_Id}`
+        Peer_Count=`echo ${Peering_Ref} | | jq ".SecurityGroupReferenceSet" | jq length`
+        if ((  ${Peer_Count} > 0 )); then
+            echo "holder" 
+            for a in $(seq 0 $(( ${Peer_Count} - 1 )) ); do
+                Peer_Vpc_Id=`echo ${Peering_Ref} | jq ".SecurityGroupReferenceSet[${a}] .ReferencingVpcId" | sed -e "s/[^ a-z0-9-]//g"`
+                Peer_Acc_Id=`aws ec2 describe-vpcs --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .OwnerId"`
+                =`aws ec2 describe-vpcs --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .VpcPeeringConnectionId"`
+                echo "The SG '${Sec_Id}' has a dependancy in a SG in VPC '${Peer_Vpc_Id}' which is located in the AWS account with ID '${Peer_Acc_Id}' via the peering connection '${Peering_Id}'. You will need to locate this dependancy, and remove in manually. This script does not support cross-account removals."
+            done
+        fi
         error=$( { aws ec2 delete-security-group --dry-run --group-id ${Sec_Id} > /dev/null; } 2>&1 )
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${SG_ID}' FAILED with the following error: '${error}'"
