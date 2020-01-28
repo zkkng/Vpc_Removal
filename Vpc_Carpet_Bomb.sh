@@ -421,31 +421,31 @@ function Delete_Security_Group () {
 
 # This function is a catastrophe and I am not smart enough to make it pretty =(
 function Security_Group_Rule_Delete () {
-    echo "Security_Group_Rule_Delete"
+    echo "Removing dependancies for all security groups that failed to delete... This may take a while depending on how many dependancies exist."
     SG_Dependacy_Queue=${1}
-    for i in ${SG_Dependacy_Queue}; do
-        Remove_Rules_List=`aws ec2 describe-security-groups --filters "Name=ip-permission.group-id,Values=${i}"`
+    for Sec_Id in ${SG_Dependacy_Queue}; do
+        Remove_Rules_List=`aws ec2 describe-security-groups --filters "Name=ip-permission.group-id,Values=${Sec_Id}"`
         for x in $(seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[]" | jq length` - 1 )) ); do                                                  # Gets sequence of number of seucrity groups for each SG
             for y in $(seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${x}] .IpPermissions"  | jq length` - 1 )) ); do                          # For each SG Gets sequence of number of rules
-                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${i}')"`        # For Each rule check if it contains the SG-Id that is being deleted
+                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${Sec_Id}')"`        # For Each rule check if it contains the SG-Id that is being deleted
                 if ! [[ -z ${Test_Val} ]]; then                                                                                                             # If that value is found delete the rule
                     echo "Deleting rule"
                     GroupId=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .GroupId" | sed -e "s/[^ a-z0-9-]//g"`
                     Protocol=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .IpProtocol" | sed -e "s/[^ a-z0-9-]//g"`
                     FromPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .FromPort" | sed -e "s/[^ a-z0-9-]//g"`
                     ToPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .ToPort" | sed -e "s/[^ a-z0-9-]//g"`
-                    aws ec2 revoke-security-group-ingress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${i}'}]}]"
+                    aws ec2 revoke-security-group-ingress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${Sec_Id}'}]}]"
                 fi
             done
-            for i in $( seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${i}] .IpPermissionsEgress"  | jq length` - 1 )) ); do
-                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${i}')"`  # For Each rule check if it contains the SG-Id that is being deleted
+            for z in $( seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${Sec_Id}] .IpPermissionsEgress"  | jq length` - 1 )) ); do
+                Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${z}] .UserIdGroupPairs[0] | select(.GroupId=='${Sec_Id}')"`  # For Each rule check if it contains the SG-Id that is being deleted
                 if ! [[ -z ${Test_Val} ]]; then                                                                                                             # If that value is found delete the rule
                     echo "Deleting rule"
                     GroupId=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .GroupId" | sed -e "s/[^ a-z0-9-]//g"`
-                    Protocol=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .IpProtocol" | sed -e "s/[^ a-z0-9-]//g"`
-                    FromPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .FromPort" | sed -e "s/[^ a-z0-9-]//g"`
-                    ToPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${y}] .ToPort" | sed -e "s/[^ a-z0-9-]//g"`
-                    aws ec2 revoke-security-group-egress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${i}'}]}]"
+                    Protocol=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${z}] .IpProtocol" | sed -e "s/[^ a-z0-9-]//g"`
+                    FromPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${z}] .FromPort" | sed -e "s/[^ a-z0-9-]//g"`
+                    ToPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissionsEgress[${z}] .ToPort" | sed -e "s/[^ a-z0-9-]//g"`
+                    aws ec2 revoke-security-group-egress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${Sec_Id}'}]}]"
                 fi
             done
             # logic so I do not forget because i am dumdum
@@ -457,10 +457,41 @@ function Security_Group_Rule_Delete () {
             # Then we ALSO need to check VPC peering dependancies and decide if we are going to even try deleting those. Maybe check if the other VPC is in the same account and if it is then go delete the rules using same logic.
             # This is just an example command to select a rule with a specific SG-id ---- echo $Remove_Rules_List | jq '.SecurityGroups[] .IpPermissions[] .UserIdGroupPairs[0] | select(.GroupId=="sg-010817e281d9d1f42")'
         done
+        
+        
+        
+        ### All VPCs in the account should be checked so only need for VPC peering check would be to tell the user where the dependancies are. ###
+        ### Since this isnt absolutely necessary I am leaving it unfinished for now. I am just too lazy ###
+        
+#        Peering_Ref=`aws ec2 describe-security-group-references --group-id ${Sec_Id}`
+#        Peer_Count=`echo ${Peering_Ref} | | jq ".SecurityGroupReferenceSet" | jq length`
+#        if ((  ${Peer_Count} > 0 )); then
+#            echo "holder" 
+#            for a in $(seq 0 $(( ${Peer_Count} - 1 )) ); do
+#                Peer_Vpc_Id=`echo ${Peering_Ref} | jq ".SecurityGroupReferenceSet[${a}] .ReferencingVpcId" | sed -e "s/[^ a-z0-9-]//g"`
+#                Peer_Acc_Id=`aws ec2 describe-vpcs --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .OwnerId"`
+                 # Could just take the two above values and output them to screen saying this dependancy exists and they will need to go remove it. #
+#                Current_Acc_Id=`aws sts get-caller-identity | jq ".Account"`
+#                if [[ ${Current_Acc_Id} == ${Peer_Acc_Id} ]]; then
+#                      for b in `aws ec2 describe-security-groups --filters "Name=ip-permission.group-id,Values=${Sec_Id}"` 
+#                fi
+                #For each reference check that the VPC is in same account (sg-references across region not supported so do not check for this)
+                #describe the vpc's SG and filter by ${i}
+                #Repeat exact same removal process
+#            done
+#        fi
+        error=$( { aws ec2 delete-security-group --dry-run --group-id ${Sec_Id} > /dev/null; } 2>&1 )
+        if ! [[ ${?} == "0" ]]; then
+            echo "Entry '${SG_ID}' FAILED with the following error: '${error}'"
+        else
+            echo "Deleted ${SG_ID}"
+        fi
     done
     #aws ec2 describe-security-groups --group-ids sg-028150dc2eb59ef6b  | jq ".SecurityGroups[] .IpPermissions[0]" #Have to use a seq for this. get group-id passed from first function.
     #aws ec2 revoke-security-group-ingress --group-id sg-028150dc2eb59ef6b --ip-permissions '[{"IpProtocol": "udp", "FromPort": 20000, "ToPort": 21000, "UserIdGroupPairs": [{"GroupId": "sg-06faf27bbd27832f4"}]}]'
 }
+
+#Delete peering connections here
 
 function Delete_Subnet () {
     echo "Delete_Subnet"
