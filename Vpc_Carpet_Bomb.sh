@@ -48,7 +48,7 @@ function VPC_Verify () {
     for i in $(echo ${VPC_List} | sed "s/,/ /g"); do
         #echo ${i}                                                               #Testing only
         i=`sed -e "s/[^ a-z0-9-]//g" <<<${i}`
-        error=$( { aws ec2 describe-vpcs --vpc-id ${i} > /dev/null; } 2>&1 ) #sed -e "s/[^ a-z0-9-]//g" <<<${i} removes quotes
+        error=$( { aws ec2 describe-vpcs --region ${REGION} --vpc-id ${i} > /dev/null; } 2>&1 )
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${i}' FAILED with the following error: '${error}'" 
             Verify_Fail="true"
@@ -81,16 +81,16 @@ function VPC_Verify () {
 function Distribute_Delete () {
     VPC_List=${1}
     Delete_Instance "${VPC_List}"
+    Delete_RDS_Instance "${VPC_List}"
     Delete_RDS_Cluster "${VPC_List}"
-    Detach_IGW "${VPC_List}"
-    Delete_IGW "${VPC_List}"
     Delete_VPC_Endpoint "${VPC_List}"
     Detach_VPN_Gateway "${VPC_List}"
     Delete_NAT_Gateway "${VPC_List}"
     Delete_Route_Table "${VPC_List}"
-    Detach_ENI "${VPC_List}"
-    Delete_ENI "${VPC_List}"
+    Detach_IGW "${VPC_List}" # Calls Delete IGW
+    Detach_ENI "${VPC_List}" # Calls Delete ENI
     Delete_Security_Group "${VPC_List}"
+    Delete_VPC_Peering "${VPC_List}"
     Delete_Subnet "${VPC_List}"
     Delete_VPC "${VPC_List}"
 }
@@ -106,7 +106,6 @@ function CFN_List_Generate () {
         #list="${list}\n`echo -e "${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`"  # Output only physical ID
         #list+="`echo -e "\n ${output}" | jq ".StackResourceSummaries[] .PhysicalResourceId"`"  # Output only physical ID
     done
-    echo $CFN_List
 }
 
 ## The below functions handle deleting the resources inside a VPC. ##
@@ -124,6 +123,7 @@ function CFN_Resource_Test () {
     #return "${Skip_Delete}"
 }
 ## Need to have an optional Cloudformation checker than will alert user if resources being deleted belong to a CFN stack.
+# Add Workspaces, All ELBs (ELBs have ENIs) and Elasticache
 
 function Delete_Instance () {
     ##### Consider making full list of instances then deleting all at once. Less API calls. ######
@@ -131,7 +131,7 @@ function Delete_Instance () {
     #CFN returns instance IDs
     echo "Deleting Instances!"
     VPC_List=${1}
-    for i in `aws ec2 describe-instances --filters "Name=vpc-id,Values=${VPC_List}" | jq '.Reservations[] .Instances[].InstanceId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do
+    for i in `aws ec2 describe-instances --region ${REGION} --filters "Name=vpc-id,Values=${VPC_List}" | jq '.Reservations[] .Instances[].InstanceId' | sed -e "s|[^ a-zA-Z0-9\:\/-]||g"`; do
         #if user said yes to cfn-check check if in list of cfn and skip if in
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
@@ -148,7 +148,7 @@ function Delete_Instance () {
     done
     # for loop to delete individually to allow for individual error reporting? unless it handles deleting some but not all instances need to do testing
     for i in ${Delete_List_Instance}; do
-        error=$( { aws ec2 terminate-instances --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
+        error=$( { aws ec2 terminate-instances --region ${REGION} --dry-run --instance-ids ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${i}' FAILED with the following error: '${error}'"
         else
@@ -159,27 +159,40 @@ function Delete_Instance () {
 
 function Delete_RDS_Instance () {
     echo "Delete_RDS_Instance"
-    for i in `aws rds --region us-west-2 describe-db-instances | jq '.DBInstances[] .DBInstanceIdentifier'`; do
-        echo ${i}
-        #CFN Snippet use to check all CFN resource! #
-        if [[ ${CFN_Test} == "True" ]]; then
-            CFN_Resource_Test "${i}"
-            if [[ ${Skip_Delete} == "False" ]]; then
-                Delete_List_RDS+="${i} "
+    Int_Count=`$(( aws rds --region ${REGION} describe-db-instances | jq '.DBInstances' | jq length - 1 ))`
+    for i in $(seq 0 ${Int_Count}); do
+        RDS_Describe=`aws rds --region ${REGION} describe-db-instances | jq ".DBInstances[${i}]"`
+        if [[ *`echo ${RDS_Describe} | jq '.DBInstances[] .DBSubnetGroup.VpcId'`* == ${1} ]]; then
+            RDS_Instance=`aws rds --region ${REGION} describe-db-instances | jq ".DBInstances[${i}] .DBInstanceIdentifier" | sed -e "s/[^ a-z0-9-]//g"`
+            #CFN Snippet use to check all CFN resource! #
+            if [[ ${CFN_Test} == "True" ]]; then
+                CFN_Resource_Test "${RDS_Instance}"
+                if [[ ${Skip_Delete} == "False" ]]; then
+                    Delete_List_RDS+="${RDS_Instance} "
+                else
+                    echo "${i} belongs to a CloudFormation template. Skipping."
+                fi
             else
-                echo "${i} belongs to a CloudFormation template. Skipping."
+                Delete_List_RDS+="${RDS_Instance} "
             fi
-        else
-            Delete_List_RDS+="${i} "
+            # End CFN Snippet #
         fi
-        # End CFN Snippet #
+    done
+    for i in ${Delete_List_RDS}; do
+        error=$( { aws rds delete-db-instance --region ${REGION} --dry-run --db-instance-identifier ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
+        if ! [[ ${?} == "0" ]]; then
+            echo "Entry '${i}' FAILED with the following error: '${error}'"
+        else
+            echo "Deleted ${i}"
+        fi
     done
 }
 
+#This might not be necessary
+#It might be necessary to delete if a cluster requires one SG and all SG must be deleted.
 function Delete_RDS_Cluster () {
     echo "Delete_RDS_Cluster"
-    for i in `aws rds --region us-west-2 describe-db-clusters | jq '.DBClusters[] .DBClusterIdentifier'`; do
-        echo ${i}
+    for i in `aws rds --region ${REGION} describe-db-clusters | jq '.DBClusters[] .DBClusterIdentifier' | sed -e "s/[^ a-z0-9-]//g"`; do
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
@@ -193,10 +206,18 @@ function Delete_RDS_Cluster () {
         fi
         # End CFN Snippet #
     done
+    for i in ${Delete_List_Cluster}; do
+        error=$( { aws rds delete-db-cluster --region ${REGION} --dry-run --db-cluster-identifier ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
+        if ! [[ ${?} == "0" ]]; then
+            echo "Entry '${i}' FAILED with the following error: '${error}'"
+        else
+            echo "Deleted ${i}"
+        fi
+    done
 }
 
 function Detach_IGW () {
-    echo "Detach_IGW"
+    echo "Detach_ENI"
     for i in echo "Placeholder"; do
         echo ${i}
         #CFN Snippet use to check all CFN resource! #
@@ -212,6 +233,7 @@ function Detach_IGW () {
         fi
         # End CFN Snippet #
     done
+    Delete_IGW "${Delete_List_IGW}"
 }
 
 function Delete_IGW () {
@@ -253,10 +275,6 @@ function Delete_VPC_Endpoint () {
     done
 }
 
-function Delete_VPC_Peering () {
-    echo "Delete_VPC_Peering"
-    
-}
 
 #######This block will call eachother since they need to reference eachother's output ###
 function Detach_VPN_Gateway () {
@@ -344,23 +362,32 @@ function Delete_Route_Table () {
 }
 
 function Detach_ENI () {
-    echo "Detach_ENI"
-    for i in echo "Placeholder"; do
+    echo "Detach_IGW"
+    VPC_List=${1}
+    ENI_Info=`aws ec2 describe-network-interfaces --region ${REGION} --filters "Name=vpc-id,Values=${VPC_List}"`
+    for i in `echo ${ENI_Info} | jq '.NetworkInterfaces[] .NetworkInterfaceId' | sed -e "s/[^ a-z0-9-]//g"`; do
         echo ${i}
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
             CFN_Resource_Test "${i}"
             if [[ ${Skip_Delete} == "False" ]]; then
-                Delete_List+="${i} "
+                Delete_List_ENI+="${i} "
+                Detach_List ENI+=`echo ${ENI_Info} | jq '.NetworkInterfaces[]  | select(.NetworkInterfaceId == "'"${i}"'").Attachment.AttachmentId'| sed -e "s/[^ a-z0-9-]//g"`
             else
                 echo "${i} belongs to a CloudFormation template. Skipping."
             fi
         else
-            Delete_List+="${i} "
+            Delete_List_ENI+="${i} "
+            Detach_List ENI+=`echo ${ENI_Info} | jq '.NetworkInterfaces[]  | select(.NetworkInterfaceId == "'"${i}"'").Attachment.AttachmentId'| sed -e "s/[^ a-z0-9-]//g"`
         fi
         # End CFN Snippet #
     done
+    for i in ${Delete_List_ENI}; do
+         error=$( { aws ec2 detach-network-interface --region ${REGION} --dry-run --attachment-id ${i} > /dev/null; } 2>&1 ) # Dry run for testing 
+    done
+    Delete_ENI "${Delete_List_ENI}"
 }
+
 
 function Delete_ENI () {
     echo "Delete_ENI"
@@ -385,7 +412,7 @@ function Delete_ENI () {
 function Delete_Security_Group () {
     # CFN returns SG ID
     echo "Delete_Security_Group"
-    for i in `aws ec2 describe-security-groups --filters "Name=vpc-id,Values=${VPC_List}" | jq ".SecurityGroups[] .GroupId"`; do
+    for i in `aws ec2 describe-security-groups --region ${REGION} --filters "Name=vpc-id,Values=${VPC_List}" | jq ".SecurityGroups[] .GroupId"`; do
         echo ${i}
         #CFN Snippet use to check all CFN resource! #
         if [[ ${CFN_Test} == "True" ]]; then
@@ -403,7 +430,7 @@ function Delete_Security_Group () {
     for i in ${Delete_List_SG}; do
         echo ${i}
         SG_ID=`sed -e "s/[^ a-z0-9-]//g" <<<${i}`
-        error=$( { aws ec2 delete-security-group --dry-run --group-id ${SG_ID} > /dev/null; } 2>&1 )
+        error=$( { aws ec2 delete-security-group --region ${REGION} --dry-run --group-id ${SG_ID} > /dev/null; } 2>&1 )
         if ! [[ ${?} == "0" ]]; then
             if [[ ${error} == *"DependencyViolation"* ]]; then
                 SG_Dependacy_Queue+="${SG_ID} "
@@ -424,7 +451,7 @@ function Security_Group_Rule_Delete () {
     echo "Removing dependancies for all security groups that failed to delete... This may take a while depending on how many dependancies exist."
     SG_Dependacy_Queue=${1}
     for Sec_Id in ${SG_Dependacy_Queue}; do
-        Remove_Rules_List=`aws ec2 describe-security-groups --filters "Name=ip-permission.group-id,Values=${Sec_Id}"`
+        Remove_Rules_List=`aws ec2 describe-security-groups --region ${REGION} --filters "Name=ip-permission.group-id,Values=${Sec_Id}"`
         for x in $(seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[]" | jq length` - 1 )) ); do                                                  # Gets sequence of number of seucrity groups for each SG
             for y in $(seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${x}] .IpPermissions"  | jq length` - 1 )) ); do                          # For each SG Gets sequence of number of rules
                 Test_Val=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .UserIdGroupPairs[0] | select(.GroupId=='${Sec_Id}')"`        # For Each rule check if it contains the SG-Id that is being deleted
@@ -434,7 +461,8 @@ function Security_Group_Rule_Delete () {
                     Protocol=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .IpProtocol" | sed -e "s/[^ a-z0-9-]//g"`
                     FromPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .FromPort" | sed -e "s/[^ a-z0-9-]//g"`
                     ToPort=`echo $Remove_Rules_List | jq ".SecurityGroups[${x}] .IpPermissions[${y}] .ToPort" | sed -e "s/[^ a-z0-9-]//g"`
-                    aws ec2 revoke-security-group-ingress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${Sec_Id}'}]}]"
+                    #Consider logging the following Line to error log.
+                    Remove_Call=`aws ec2 revoke-security-group-ingress --region ${REGION} --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${Sec_Id}'}]}]"`
                 fi
             done
             for z in $( seq 0 $(( `echo ${Remove_Rules_List} | jq ".SecurityGroups[${Sec_Id}] .IpPermissionsEgress"  | jq length` - 1 )) ); do
@@ -448,33 +476,19 @@ function Security_Group_Rule_Delete () {
                     aws ec2 revoke-security-group-egress --group-id ${GroupId} --dry-run --ip-permissions "[{'IpProtocol': '${Protocol}', 'FromPort': ${FromPort}, 'ToPort': ${ToPort}, 'UserIdGroupPairs': [{'GroupId': '${Sec_Id}'}]}]"
                 fi
             done
-            # logic so I do not forget because i am dumdum
-            # Remove_Rules_List is a list of OTHER SGs that reference the one that is being deleted
-            # This for loop will sequence throguh .SecurityGroups[0-x]
-            # We then need a count of all .ippermission and .egressrules sperately in each .SecurityGroups[0-x]
-            # then for loop through each .IpPermissions[0-y] and use .UserIdGroupPairs[0] | select(.GroupId=="${i}")'
-            # if it DOESNT return an error we take all values from that .IpPermissions or egress and use those values to delete the rule
-            # Then we ALSO need to check VPC peering dependancies and decide if we are going to even try deleting those. Maybe check if the other VPC is in the same account and if it is then go delete the rules using same logic.
-            # This is just an example command to select a rule with a specific SG-id ---- echo $Remove_Rules_List | jq '.SecurityGroups[] .IpPermissions[] .UserIdGroupPairs[0] | select(.GroupId=="sg-010817e281d9d1f42")'
         done
-        
-        
-        
-        ### All VPCs in the account should be checked so only need for VPC peering check would be to tell the user where the dependancies are. ###
-        ### Since this isnt absolutely necessary I am leaving it unfinished for now. I am just too lazy ###
-        
-        Peering_Ref=`aws ec2 describe-security-group-references --group-id ${Sec_Id}`
+        Peering_Ref=`aws ec2 describe-security-group-references --region ${REGION} --group-id ${Sec_Id}`
         Peer_Count=`echo ${Peering_Ref} | | jq ".SecurityGroupReferenceSet" | jq length`
         if ((  ${Peer_Count} > 0 )); then
             echo "holder" 
             for a in $(seq 0 $(( ${Peer_Count} - 1 )) ); do
                 Peer_Vpc_Id=`echo ${Peering_Ref} | jq ".SecurityGroupReferenceSet[${a}] .ReferencingVpcId" | sed -e "s/[^ a-z0-9-]//g"`
-                Peer_Acc_Id=`aws ec2 describe-vpcs --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .OwnerId"`
-                =`aws ec2 describe-vpcs --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .VpcPeeringConnectionId"`
+                Peer_Acc_Id=`aws ec2 describe-vpcs --region ${REGION} --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .OwnerId"`
+                Peering_Id=`aws ec2 describe-vpcs  --region ${REGION} --vpc-id ${Peer_Vpc_Id} | jq ".Vpcs[0] .VpcPeeringConnectionId"`
                 echo "The SG '${Sec_Id}' has a dependancy in a SG in VPC '${Peer_Vpc_Id}' which is located in the AWS account with ID '${Peer_Acc_Id}' via the peering connection '${Peering_Id}'. You will need to locate this dependancy, and remove in manually. This script does not support cross-account removals."
             done
         fi
-        error=$( { aws ec2 delete-security-group --dry-run --group-id ${Sec_Id} > /dev/null; } 2>&1 )
+        error=$( { aws ec2 delete-security-group --region ${REGION} --dry-run --group-id ${Sec_Id} > /dev/null; } 2>&1 )
         if ! [[ ${?} == "0" ]]; then
             echo "Entry '${SG_ID}' FAILED with the following error: '${error}'"
         else
@@ -485,7 +499,10 @@ function Security_Group_Rule_Delete () {
     #aws ec2 revoke-security-group-ingress --group-id sg-028150dc2eb59ef6b --ip-permissions '[{"IpProtocol": "udp", "FromPort": 20000, "ToPort": 21000, "UserIdGroupPairs": [{"GroupId": "sg-06faf27bbd27832f4"}]}]'
 }
 
-#Delete peering connections here
+function Delete_VPC_Peering () {
+    echo "Delete_VPC_Peering"
+    
+}
 
 function Delete_Subnet () {
     echo "Delete_Subnet"
@@ -518,7 +535,7 @@ while (true); do
      """
     echo -en """${NC}This script is dangerous! It can damage your infastructure in irreversible ways if you are not careful!
 This script will attempt to delete all VPC IDs that you input, or wipeout all VPCs in a region.
-If you run this script carelessly, or without permission you could take an entire company.
+If you run this script carelessly, or without permission you could take down an entire company.
 There will be one final confirmation before any asset is deleted. Think carefully before continuing.
 Please be careful when using this. 
 
